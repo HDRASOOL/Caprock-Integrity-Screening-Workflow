@@ -1,0 +1,156 @@
+# ================================
+# CAPROCK INTEGRITY ML WORKFLOW
+# ================================
+
+import pandas as pd
+import numpy as np
+from pathlib import Path
+
+from sklearn.model_selection import train_test_split, GridSearchCV
+from sklearn.tree import DecisionTreeClassifier
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.metrics import classification_report, confusion_matrix, accuracy_score
+
+import matplotlib.pyplot as plt
+
+# ================================
+# FILE PATH (UPDATE THIS)
+# ================================
+FILE_PATH = Path("/content/rock_mechanics_master_clean.xlsx")
+
+# ================================
+# LOAD DATA
+# ================================
+df = pd.read_excel(FILE_PATH)
+
+# ================================
+# BASIC CLEANING
+# ================================
+df = df.dropna()
+
+# ================================
+# FEATURE ENGINEERING
+# ================================
+
+# Normalize permeability (if exists)
+if "Permeability" in df.columns:
+    df["Perm_norm"] = df["Permeability"] / df["Permeability"].max()
+else:
+    df["Perm_norm"] = 0
+
+# Stress ratio (Peak / Confining)
+df["Stress_ratio"] = df["Peak Stress"] / df["Confining Stress"]
+
+# CISI index
+df["CISI"] = df["Stress_ratio"] * df["Perm_norm"]
+
+# ================================
+# CLASSIFICATION (SAFE / TRANSITION / RISK)
+# ================================
+def classify_cisi(val):
+    if val < 0.5:
+        return "Safe"
+    elif val < 1.0:
+        return "Transitional"
+    else:
+        return "Risk"
+
+df["Integrity_Class"] = df["CISI"].apply(classify_cisi)
+
+# ================================
+# FEATURES & TARGET
+# ================================
+features = [
+    "Confining Stress",
+    "Peak Stress",
+    "Young Modulus",
+    "Perm_norm"
+]
+
+X = df[features]
+y = df["Integrity_Class"]
+
+# ================================
+# TRAIN-TEST SPLIT
+# ================================
+X_train, X_test, y_train, y_test = train_test_split(
+    X, y, test_size=0.3, stratify=y, random_state=42
+)
+
+# ================================
+# DECISION TREE
+# ================================
+dt = DecisionTreeClassifier(random_state=42)
+
+dt_params = {
+    "max_depth": [3, 5, 10],
+    "min_samples_split": [2, 5, 10],
+    "min_samples_leaf": [1, 2, 5]
+}
+
+dt_grid = GridSearchCV(dt, dt_params, cv=5)
+dt_grid.fit(X_train, y_train)
+
+dt_best = dt_grid.best_estimator_
+
+# Predictions
+y_pred_dt = dt_best.predict(X_test)
+
+print("\nDecision Tree Results")
+print("Accuracy:", accuracy_score(y_test, y_pred_dt))
+print(classification_report(y_test, y_pred_dt))
+print(confusion_matrix(y_test, y_pred_dt))
+
+# ================================
+# RANDOM FOREST
+# ================================
+rf = RandomForestClassifier(random_state=42)
+
+rf_params = {
+    "n_estimators": [50, 100, 200],
+    "max_depth": [5, 10, None],
+    "min_samples_split": [2, 5],
+    "min_samples_leaf": [1, 2]
+}
+
+rf_grid = GridSearchCV(rf, rf_params, cv=5)
+rf_grid.fit(X_train, y_train)
+
+rf_best = rf_grid.best_estimator_
+
+# Predictions
+y_pred_rf = rf_best.predict(X_test)
+
+print("\nRandom Forest Results")
+print("Accuracy:", accuracy_score(y_test, y_pred_rf))
+print(classification_report(y_test, y_pred_rf))
+print(confusion_matrix(y_test, y_pred_rf))
+
+# ================================
+# FEATURE IMPORTANCE
+# ================================
+importances = rf_best.feature_importances_
+
+plt.figure()
+plt.barh(features, importances)
+plt.xlabel("Importance")
+plt.title("Feature Importance")
+plt.show()
+
+# ================================
+# MOHR-COULOMB FIT
+# ================================
+if "Shear Stress" in df.columns and "Normal Stress" in df.columns:
+    coeffs = np.polyfit(df["Normal Stress"], df["Shear Stress"], 1)
+    cohesion = coeffs[1]
+    friction_angle = np.arctan(coeffs[0]) * (180 / np.pi)
+
+    print("\nMohr-Coulomb Parameters")
+    print("Cohesion:", cohesion)
+    print("Friction Angle:", friction_angle)
+
+# ================================
+# SUMMARY
+# ================================
+print("\nDataset Summary")
+print(df.describe())
